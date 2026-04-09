@@ -1,17 +1,17 @@
 """
-Agente Personal - Telegram Bot
-Funciones: programación, automatización, diseño, memoria con Supabase
+Agente Personal - Telegram Bot (modo Webhook para Render gratis)
 """
 
 import os
 import logging
-import asyncio
+from fastapi import FastAPI, Request
 from telegram import Update, constants
 from telegram.ext import (
     Application, CommandHandler, MessageHandler,
     filters, ContextTypes
 )
 from agent_core import AgentCore
+import uvicorn
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -20,150 +20,144 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-agent = AgentCore()
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", "")  # URL de Render
 
+agent = AgentCore()
+app_tg = Application.builder().token(TELEGRAM_TOKEN).build()
+app = FastAPI()
+
+
+# ─── Handlers de Telegram ───────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /start"""
     name = update.effective_user.first_name or "usuario"
     await update.message.reply_text(
         f"👋 ¡Hola {name}! Soy tu agente personal.\n\n"
         "Puedo ayudarte con:\n"
-        "🖥️ *Programación* — escribir, revisar y explicar código\n"
-        "⚙️ *Automatización* — crear scripts y flujos\n"
-        "🎨 *Diseño* — ideas, estructuras, wireframes en texto\n"
-        "🔍 *Búsqueda* — información actualizada de la web\n"
+        "🖥️ *Programación* — código en cualquier lenguaje\n"
+        "⚙️ *Automatización* — scripts y flujos\n"
+        "🎨 *Diseño* — arquitecturas y sistemas\n"
+        "🔍 *Búsqueda* — información de la web\n"
         "🧮 *Cálculos* — matemáticas y lógica\n\n"
-        "Simplemente escribime lo que necesitás. ¿Empezamos?",
+        "¡Escribime lo que necesitás!",
         parse_mode=constants.ParseMode.MARKDOWN
     )
-
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /help"""
     await update.message.reply_text(
-        "🤖 *Comandos disponibles:*\n\n"
-        "/start — Mensaje de bienvenida\n"
-        "/help — Ver esta ayuda\n"
-        "/reset — Limpiar historial de conversación\n"
-        "/tools — Ver herramientas disponibles\n\n"
-        "También podés enviarme:\n"
-        "📎 Archivos (.py, .txt, .json, .csv, .pdf)\n"
-        "💬 Preguntas en lenguaje natural\n"
-        "📋 Código para revisar o depurar",
+        "🤖 *Comandos:*\n\n"
+        "/start — Bienvenida\n"
+        "/help — Esta ayuda\n"
+        "/reset — Limpiar historial\n"
+        "/tools — Ver herramientas\n\n"
+        "También podés enviar archivos: `.py .txt .json .csv .pdf`",
         parse_mode=constants.ParseMode.MARKDOWN
     )
 
-
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /reset — limpia el historial"""
     user_id = str(update.effective_user.id)
     await agent.reset_history(user_id)
     await update.message.reply_text("🧹 Historial limpiado. Empezamos de cero.")
 
-
 async def tools(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /tools — lista herramientas"""
     await update.message.reply_text(
         "🔧 *Herramientas activas:*\n\n"
-        "🔍 `web_search` — Buscar en internet\n"
-        "🖥️ `execute_code` — Ejecutar código Python\n"
-        "🧮 `calculate` — Calcular expresiones matemáticas\n"
-        "📅 `get_datetime` — Fecha y hora actual\n"
-        "📄 `read_file` — Leer archivos subidos\n\n"
-        "_Más herramientas próximamente..._",
+        "🔍 Búsqueda web\n"
+        "🖥️ Ejecutar código Python\n"
+        "🧮 Calculadora\n"
+        "📅 Fecha y hora\n"
+        "📄 Leer archivos",
         parse_mode=constants.ParseMode.MARKDOWN
     )
 
-
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja mensajes de texto del usuario."""
     user_id = str(update.effective_user.id)
     user_text = update.message.text
-
-    # Mostrar "escribiendo..."
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=constants.ChatAction.TYPING
     )
-
     try:
         response = await agent.run(user_id=user_id, message=user_text)
-        # Telegram tiene límite de 4096 chars por mensaje
-        if len(response) > 4000:
-            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode=constants.ParseMode.MARKDOWN)
-        else:
-            await update.message.reply_text(response, parse_mode=constants.ParseMode.MARKDOWN)
+        for i in range(0, len(response), 4000):
+            await update.message.reply_text(
+                response[i:i+4000],
+                parse_mode=constants.ParseMode.MARKDOWN
+            )
     except Exception as e:
-        logger.error(f"Error procesando mensaje: {e}")
-        await update.message.reply_text(
-            "❌ Hubo un error procesando tu solicitud. Intenta de nuevo."
-        )
-
+        logger.error(f"Error: {e}")
+        await update.message.reply_text("❌ Error procesando tu mensaje. Intenta de nuevo.")
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Maneja archivos enviados por el usuario."""
     user_id = str(update.effective_user.id)
     doc = update.message.document
-
-    allowed_ext = ['.py', '.txt', '.json', '.csv', '.md', '.html', '.js', '.pdf']
+    allowed = ['.py', '.txt', '.json', '.csv', '.md', '.html', '.js', '.pdf']
     file_name = doc.file_name or "archivo"
     ext = '.' + file_name.split('.')[-1].lower() if '.' in file_name else ''
-
-    if ext not in allowed_ext:
-        await update.message.reply_text(
-            f"⚠️ Formato no soportado. Acepto: {', '.join(allowed_ext)}"
-        )
+    if ext not in allowed:
+        await update.message.reply_text(f"⚠️ Solo acepto: {', '.join(allowed)}")
         return
-
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=constants.ChatAction.TYPING
     )
-
     try:
         file = await context.bot.get_file(doc.file_id)
         content_bytes = await file.download_as_bytearray()
         content_text = content_bytes.decode('utf-8', errors='ignore')
-
-        # Procesar archivo con el agente
         caption = update.message.caption or f"Analiza este archivo: {file_name}"
-        message_with_file = f"{caption}\n\n```\n{content_text[:3000]}\n```"
-
-        response = await agent.run(user_id=user_id, message=message_with_file)
-
-        if len(response) > 4000:
-            chunks = [response[i:i+4000] for i in range(0, len(response), 4000)]
-            for chunk in chunks:
-                await update.message.reply_text(chunk, parse_mode=constants.ParseMode.MARKDOWN)
-        else:
-            await update.message.reply_text(response, parse_mode=constants.ParseMode.MARKDOWN)
-
+        msg = f"{caption}\n\n```\n{content_text[:3000]}\n```"
+        response = await agent.run(user_id=user_id, message=msg)
+        for i in range(0, len(response), 4000):
+            await update.message.reply_text(
+                response[i:i+4000],
+                parse_mode=constants.ParseMode.MARKDOWN
+            )
     except Exception as e:
-        logger.error(f"Error con archivo: {e}")
-        await update.message.reply_text("❌ No pude procesar el archivo. Intenta de nuevo.")
+        logger.error(f"Error archivo: {e}")
+        await update.message.reply_text("❌ No pude procesar el archivo.")
 
 
-def main():
-    """Punto de entrada principal."""
-    if not TELEGRAM_TOKEN:
-        raise ValueError("TELEGRAM_TOKEN no configurado")
+# ─── Registrar handlers ─────────────────────────────────────
 
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
+app_tg.add_handler(CommandHandler("start", start))
+app_tg.add_handler(CommandHandler("help", help_command))
+app_tg.add_handler(CommandHandler("reset", reset))
+app_tg.add_handler(CommandHandler("tools", tools))
+app_tg.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app_tg.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    # Handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("reset", reset))
-    app.add_handler(CommandHandler("tools", tools))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
-    logger.info("🤖 Agente Personal iniciado en Telegram...")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+# ─── Endpoints FastAPI ──────────────────────────────────────
+
+@app.get("/")
+async def root():
+    return {"status": "ok", "agent": "Agente Personal", "version": "1.0"}
+
+@app.get("/health")
+async def health():
+    return {"status": "healthy"}
+
+@app.post(f"/webhook/{TELEGRAM_TOKEN}")
+async def webhook(request: Request):
+    data = await request.json()
+    update = Update.de_json(data, app_tg.bot)
+    await app_tg.initialize()
+    await app_tg.process_update(update)
+    return {"ok": True}
+
+@app.on_event("startup")
+async def on_startup():
+    """Al iniciar, registra el webhook en Telegram."""
+    await app_tg.initialize()
+    if WEBHOOK_URL and TELEGRAM_TOKEN:
+        webhook_url = f"{WEBHOOK_URL}/webhook/{TELEGRAM_TOKEN}"
+        await app_tg.bot.set_webhook(webhook_url)
+        logger.info(f"Webhook registrado: {webhook_url}")
+    else:
+        logger.warning("WEBHOOK_URL no configurada — el bot no recibirá mensajes")
 
 
 if __name__ == "__main__":
-    main()
+    port = int(os.environ.get("PORT", 8000))
+    uvicorn.run(app, host="0.0.0.0", port=port)
