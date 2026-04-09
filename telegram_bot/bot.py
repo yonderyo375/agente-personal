@@ -86,7 +86,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Error: {e}")
-        await update.message.reply_text("❌ Error procesando tu mensaje. Intenta de nuevo.")
+        error_msg = f"❌ Error: {str(e)}"
+        await update.message.reply_text(error_msg)
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
