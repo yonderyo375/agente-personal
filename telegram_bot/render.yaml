@@ -1,5 +1,5 @@
 services:
-  - type: worker
+  - type: web
     name: agente-personal-telegram
     env: python
     buildCommand: pip install -r requirements.txt
@@ -12,4 +12,6 @@ services:
       - key: SUPABASE_URL
         sync: false
       - key: SUPABASE_KEY
+        sync: false
+      - key: WEBHOOK_URL
         sync: false
