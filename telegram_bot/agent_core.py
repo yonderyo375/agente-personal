@@ -42,9 +42,9 @@ class AgentCore:
     def __init__(self):
         self.memory = MemoryStore()
         self.model = genai.GenerativeModel(
-            model_name="gemini-2.0-flash",
-            system_instruction=SYSTEM_PROMPT,
-        )
+    45|            model_name="gemini-1.5-flash",
+    46|            system_instruction=SYSTEM_PROMPT,
+    47|        )
 
     async def run(self, user_id: str, message: str) -> str:
         """Procesa un mensaje y devuelve la respuesta del agente."""
