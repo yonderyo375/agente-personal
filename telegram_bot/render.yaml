@@ -15,3 +15,13 @@ services:
         sync: false
       - key: WEBHOOK_URL
         sync: false
+      - key: GITHUB_TOKEN_1
+        sync: false
+      - key: GITHUB_TOKEN_2
+        sync: false
+      - key: GITHUB_TOKEN_3
+        sync: false
+      - key: GITHUB_TOKEN_4
+        sync: false
+      - key: GITHUB_TOKEN_5
+        sync: false
