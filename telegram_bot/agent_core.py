@@ -1,29 +1,33 @@
 """
-Núcleo del Agente — Gemini + Herramientas + Memoria Supabase
+Núcleo del Agente — GitHub Models (GPT-4o-mini) + Fallback Gemini
 """
 
 import os
 import asyncio
 import json
 import httpx
-import ast
-import math
-import operator
 import pytz
+import logging
 from datetime import datetime
+from typing import List, Dict, Any, Optional
+
+# Clients
+from azure.ai.inference import ChatCompletionsClient
+from azure.ai.inference.models import SystemMessage, UserMessage, AssistantMessage
+from azure.core.credentials import AzureKeyCredential
 import google.generativeai as genai
+
 from memory_store import MemoryStore
 
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+logger = logging.getLogger(__name__)
 
 SYSTEM_PROMPT = """Eres un agente de IA autónomo y altamente capaz. Tu nombre es **Nexus**.
 
 Eres experto en:
 - 🖥️ Programación (Python, JavaScript, Bash, SQL, y más)
 - ⚙️ Automatización (scripts, cron jobs, APIs, bots)
-- 🎨 Diseño de sistemas y arquitecturas
+- 🎨 Diseño de sistemas y arquitecturas (especialmente producción de anime)
 - 🔍 Búsqueda e investigación de información
-- 🧮 Cálculos matemáticos complejos
 - 📋 Análisis de código y archivos
 
 Tu comportamiento:
@@ -31,92 +35,82 @@ Tu comportamiento:
 - Explicas paso a paso cuando se necesita
 - Eres directo, conciso y muy capaz
 - Usas emojis con moderación para mejor lectura
-- Formateas el código usando bloques de código
 - Respondes en el mismo idioma que el usuario
 
-Cuando el usuario pide código, lo generas completo y listo para usar.
-Cuando detectas un error, lo corriges directamente sin excusas."""
-
+Contexto actual: Estás ayudando a Gael Fuentes con su proyecto de anime "Sombra de Pacto".
+"""
 
 class AgentCore:
     def __init__(self):
         self.memory = MemoryStore()
-        self.model = genai.GenerativeModel(
+        
+        # Lista de tokens de GitHub para rotación manual o fallback
+        self.github_tokens = [
+            os.environ.get("GITHUB_TOKEN_1", ""),
+            os.environ.get("GITHUB_TOKEN_2", ""),
+            os.environ.get("GITHUB_TOKEN_3", ""),
+            os.environ.get("GITHUB_TOKEN_4", ""),
+            os.environ.get("GITHUB_TOKEN_5", "")
+        ]
+        # Filtrar tokens vacíos
+        self.github_tokens = [t for t in self.github_tokens if t]
+        
+        self.current_token_index = 0
+        
+        # Setup Gemini as second fallback
+        genai.configure(api_key=os.environ.get("GEMINI_API_KEY", ""))
+        self.gemini_model = genai.GenerativeModel(
             model_name="gemini-2.0-flash",
-            system_instruction=SYSTEM_PROMPT,
+            system_instruction=SYSTEM_PROMPT
         )
 
-    async def run(self, user_id: str, message: str) -> str:
-        """Procesa un mensaje y devuelve la respuesta del agente."""
-        # Obtener historial
-        history = await self.memory.get_history(user_id)
+    def _get_github_client(self, token: str):
+        return ChatCompletionsClient(
+            endpoint="https://models.inference.ai.azure.com",
+            credential=AzureKeyCredential(token),
+        )
 
-        # Detectar si necesita herramientas
-        tool_result = await self._try_tool(message)
-        if tool_result:
-            message = f"{message}\n\n[Resultado de herramienta]: {tool_result}"
+    async def get_response(self, user_id: str, text: str, history: List[Dict] = None) -> str:
+        """Obtiene respuesta priorizando GitHub Models (GPT-4o-mini)."""
+        
+        # 1. Preparar mensajes para el formato OpenAI/Azure
+        messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+        if history:
+            for msg in history[-10:]: # Últimos 10 mensajes para contexto
+                role = "assistant" if msg["role"] == "model" else "user"
+                messages.append({"role": role, "content": msg["content"]})
+        
+        messages.append({"role": "user", "content": text})
 
-        # Construir chat con historial
-        chat = self.model.start_chat(history=history)
-
-        try:
-            response = await asyncio.to_thread(chat.send_message, message)
-            reply = response.text or "No pude generar una respuesta."
-        except Exception as e:
-            reply = f"❌ Error del modelo: {str(e)}"
-
-        # Guardar en memoria
-        await self.memory.save(user_id, "user", message)
-        await self.memory.save(user_id, "model", reply)
-
-        return reply
-
-    async def reset_history(self, user_id: str):
-        """Limpia el historial de un usuario."""
-        await self.memory.clear(user_id)
-
-    async def _try_tool(self, message: str) -> str:
-        """Detecta si el mensaje necesita una herramienta y la ejecuta."""
-        msg_lower = message.lower()
-
-        # Búsqueda web
-        if any(w in msg_lower for w in ["busca", "buscar", "search", "qué es", "quién es", "cuál es", "noticias", "precio de", "cotización"]):
-            keywords = message[:100]
-            return await self._web_search(keywords)
-
-        # Fecha/hora
-        if any(w in msg_lower for w in ["qué hora", "que hora", "fecha", "hoy es", "día de hoy"]):
-            return self._get_datetime()
-
-        # Cálculo
-        if any(w in msg_lower for w in ["calcula", "calculate", "cuánto es", "cuanto es", "resultado de"]):
-            return ""  # Gemini lo maneja solo
-
-        return ""
-
-    async def _web_search(self, query: str) -> str:
-        """Búsqueda web con DuckDuckGo."""
-        try:
-            async with httpx.AsyncClient(timeout=8) as client:
-                resp = await client.get(
-                    "https://api.duckduckgo.com/",
-                    params={"q": query, "format": "json", "no_html": "1", "no_redirect": "1"}
+        # 2. Intentar con GitHub Tokens
+        for i in range(len(self.github_tokens)):
+            token = self.github_tokens[self.current_token_index]
+            try:
+                client = self._get_github_client(token)
+                # Ejecución en thread para no bloquear el loop asíncrono si la librería es síncrona
+                response = await asyncio.to_thread(
+                    client.complete,
+                    messages=messages,
+                    model="gpt-4o-mini",
+                    temperature=0.7,
+                    max_tokens=4096
                 )
-                data = resp.json()
+                return response.choices[0].message.content
+            except Exception as e:
+                logger.error(f"Error con GitHub Token {self.current_token_index}: {e}")
+                # Rotar al siguiente token para la próxima vez
+                self.current_token_index = (self.current_token_index + 1) % len(self.github_tokens)
+                continue
 
-            results = []
-            if data.get("AbstractText"):
-                results.append(data["AbstractText"])
-            for topic in data.get("RelatedTopics", [])[:3]:
-                if isinstance(topic, dict) and topic.get("Text"):
-                    results.append(topic["Text"][:200])
-
-            return "\n".join(results) if results else ""
-        except Exception:
-            return ""
+        # 3. Fallback a Gemini si GitHub falla
+        try:
+            chat = self.gemini_model.start_chat(history=history)
+            response = await asyncio.to_thread(chat.send_message, text)
+            return response.text
+        except Exception as e:
+            return f"❌ Error: Todos los modelos (GitHub y Gemini) están saturados o con error de cuota.\nDetalle: {str(e)}"
 
     def _get_datetime(self) -> str:
-        """Retorna fecha y hora actual."""
         try:
             tz = pytz.timezone("America/Caracas")
             now = datetime.now(tz)
