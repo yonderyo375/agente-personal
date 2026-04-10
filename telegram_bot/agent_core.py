@@ -9,8 +9,8 @@ import httpx
 import ast
 import math
 import operator
-from datetime import datetime
 import pytz
+from datetime import datetime
 import google.generativeai as genai
 from memory_store import MemoryStore
 
@@ -42,9 +42,9 @@ class AgentCore:
     def __init__(self):
         self.memory = MemoryStore()
         self.model = genai.GenerativeModel(
-    45|            model_name="gemini-1.5-flash",
-    46|            system_instruction=SYSTEM_PROMPT,
-    47|        )
+            model_name="gemini-1.5-flash",
+            system_instruction=SYSTEM_PROMPT,
+        )
 
     async def run(self, user_id: str, message: str) -> str:
         """Procesa un mensaje y devuelve la respuesta del agente."""
