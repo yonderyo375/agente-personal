@@ -80,10 +80,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         response = await agent.run(user_id=user_id, message=user_text)
         for i in range(0, len(response), 4000):
-            await update.message.reply_text(
-                response[i:i+4000],
-                parse_mode=constants.ParseMode.MARKDOWN
-            )
+            # Enviar como texto plano para evitar errores de parseo de Markdown
+            await update.message.reply_text(response[i:i+4000])
     except Exception as e:
         logger.error(f"Error: {e}")
         error_msg = f"❌ Error: {str(e)}"
